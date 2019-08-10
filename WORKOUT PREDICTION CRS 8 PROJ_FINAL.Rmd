@@ -1,0 +1,228 @@
+---
+title: "WORKOUT PREDICTION - CRS8 PROJ"
+author: "Tommy Brant"
+date: "February 3, 2019"
+output: html_document
+  
+---
+
+
+
+```{r message=FALSE} 
+library(gbm)
+library(AppliedPredictiveModeling)
+library(caret)
+library(randomForest)
+```
+
+
+##Executive Summary
+The intent of this analysis is to build a model that can predict how well an exercise is performed based on the movements recorded. We work to tidy the data, find relevant variables, and build an accurate model. The model in this analysis is 98.63% accurate.
+
+##Loading and PreProcessing the Data
+
+Data links have been provided.
+
+```{r message=FALSE, warning=FALSE}
+
+#TRAINING SET
+trainurl<-'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+
+#DATA FOR QUIZ
+testurl<-'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+
+#TRAINING + TEST DATA
+download.file(trainurl, destfile = "TRAIN SET - CRS8PROJ.csv")
+trainData = read.csv("TRAIN SET - CRS8PROJ.csv")
+
+
+#VALIDATION SET FOR QUIZ
+download.file(testurl, destfile = "VALIDATION SET - CRS8PROJ.csv")
+validation = read.csv("VALIDATION SET - CRS8PROJ.csv")
+
+
+```
+
+Now, let's split up our training set into a training and test set. Note the variable to be predicted is the type of workout, 'classe'.
+```{r}
+set.seed(4321234)
+
+#create training(75%) and testing(25%) sets
+inTrain = createDataPartition(trainData$classe, p = 3/4)[[1]]
+training = trainData[inTrain,]
+testing = trainData[-inTrain,]
+
+```
+
+
+##Tidy the Data
+
+Upon exploring the data, we find there are several variables with NA's or missing values.
+
+```{r}
+##TESTS FOR MISSING VALUES/NA's
+t1<-training
+#Number of columns
+length(t1[1,])
+#Preliminary Look at first 20 columns
+head(t1[1:20])
+#Number of NAs for this variable
+length(t1[,18][is.na(t1[,18])])
+
+
+```
+In our training set, there are `r length(t1[,1])` entries, and `r length(t1[1,])` variables. Imputing the data with it's variable mean or zeroes would be normally be considered, but it appears that more than 90% of the values are missing or NA. Thus, we are going to exclude these variables entirely for our model. Let's work to find out what variables we need to exclude.
+
+
+```{r warning=FALSE}
+##IDENTIFYING NA VALUES -AND- MISSING VALUES
+
+
+#THIS FOR LOOP IDENTIFIES NA VALUES AND CORRESPONDING VARIABLES
+
+#FIRST COLUMN WHERE NA's is 18
+j<-rep.int(NA, length(t1))
+for (i in 1:length(t1)){
+  if (length(t1[,i][is.na(t1[,i])])>14000)
+    j[i]<-i
+}
+#j # indices where variables should be avoided, otherwise, NA
+#table(is.na(j)) #INDICATES 93 COLUMNS HAVE GOOD DATA; ALTERNATIVE 67 COLUMNS HAVE DATA TO BE IGNORED
+
+
+
+
+#THIS FOR LOOP IDENTIFIES MISSING VALUES AND CORRESPONDING VARIABLES
+k<-rep.int(NA, length(t1))  #length(k)
+
+for (i in 8:159){ #8 THRU 159 B/C THOSE ARE THE APPLICABLE MEASUREMENTS
+  if ((class(t1[,i]) == "factor" & length(t1[,i][is.na(as.numeric(as.character(t1[,12])))])>14000)){  
+    k[i]<-i
+  }
+}
+
+#k # indices where variables should be avoided, otherwise, NA
+#table(is.na(k)) #INDICATES 33 columns that have substantial missing data
+
+#Tidy Data Set
+t1.2<-t1[,(is.na(j) & is.na(k))] 
+length(t1.2)
+```
+
+After filtering out the NA and Missing values, our data set now has `r length(t1.2)` variables The first 7 columns appear to be indexing columns of sorts, and will remain in the data set, but not used for our model.
+
+Given classe is a categorical variable, let's use a random forest model to predict.
+
+##Finding Impactful Variables to predict Classe
+Next, we will need to identify what variables should be used to predict classe. We will accomplish this by looking at the Gini importance AKA Mean Decrease in Gini Impurity. This is effectively a measure of how important a variable is for estimating the value of the predicted variable across all of the trees that make up the forest. A higher Mean Decrease in Gini impurity indicates higher variable importance. 
+
+```{r}
+#RANDOM FOREST CROSS VALIDATION
+rfcv1<-rfcv(trainx=t1.2[,8:59], trainy=t1.2$classe, cv.fold=10) #10 FOLD CV
+  
+#visualize error rate - 
+plot(rfcv1$n.var, rfcv1$error.cv, xlab="Variable Quantity", ylab="Error Rate")
+
+```
+
+Variables are sorted and displayed in the Variable Importance Plot created for the Random Forest.
+We can see there is substantial error rate until 13 variables are included in the Random Forest model.
+Now let's find out what those variables are.
+
+```{r}  
+#IMPORTANCE
+rf2<-randomForest(classe ~ .,data=t1.2[8:60])
+imp2<-importance(rf2, type=2)
+
+#Unordered Data Frame of Variables and their importance
+imp2.1.1<-data.frame(overall=as.numeric(imp2), names=rownames(imp2))
+
+#ORDERED DATA FRAME
+imp2.1.2<-imp2.1.1
+imp2.1.2<-imp2.1.1[order(imp2.1.2$overall, decreasing=T),]
+imp2.1.2
+```
+
+Note the list of variables ordered by their importance.
+Next, we filter by these variables in our training and testing data sets.
+
+```{r}
+
+#CORRESPOND THE 13 MOST IMPORTANT VARIABLES WITH OUR TRAINING DATA SET
+
+t1.5<-t1.2[,1:7]
+for (i in 1:13){
+  t1.5<-cbind(t1.5,t1.2[,which(names(t1.2) == imp2.1.2$names[i])])
+  names(t1.5)[7+i]<-as.character(imp2.1.2$names[i]) #CHANGE COL NAMES TO ORIG
+}
+
+t1.5<-cbind(t1.5, t1.2$classe) #ADD CLASSE VARIABLE AND DATA
+names(t1.5)[21] <- "classe"
+
+
+#NOW TO APPLY THIS TO OUR TESTING DATA SET
+testing1.1<-testing[,1:7]
+for (i in 1:13){
+  testing1.1<-cbind(testing1.1,testing[,which(names(testing) == imp2.1.2$names[i])])
+  names(testing1.1)[7+i]<-as.character(imp2.1.2$names[i]) #CHANGE COL NAMES TO ORIG
+}
+testing1.1<-cbind(testing1.1, testing$classe) #ADD CLASSE VARIABLE AND DATA
+names(testing1.1)[21] <- "classe"
+
+
+
+```
+
+
+## Modeling and Cross Validation
+Now that we have our significant variables, we will build a model with train(), includuing K fold cross validation with 10 folds. Cross validation , specifically Bootstap validation, is performed as part of train(). Using K fold validation with 10 folds in our model.
+```{r}
+#Random Forest with Tunelength = 10, and K fold validation with 10 folds
+model1.2<-train(as.factor(classe)~., method="rf", data=t1.5[,8:21], tuneLength=10, trControl=trainControl(method="cv", number=10))
+
+print(model1.2) #SEE NOTES ABOVE REGARDIGN CONFUSION MATRIX, CROSS VALIDATION, ETC
+
+#print(model1.1$finalModel)
+```
+
+Note mtry accuracy is 98.63% accurate for our model with mtry = 4.
+Let's use this model as a basis for prediction using the testing data set, and see what is the actual accuracy.
+
+
+##Predicting Workout Type and Model Accuracy
+```{r}
+#PREDICT AGAINST TIDY TEST DATA
+predrf1<-predict(model1.2, newdata=testing1.1)
+
+#CONFUSION MATRIX TO COMPARE ACTUAL TO PREDICTED VALUES
+confusionMatrix(predrf1,testing1.1$classe)
+```
+
+The confusion matrix indicates our accuracy is `r confusionMatrix(predrf1,testing1.1$classe)$overall[1]`, with out of sample error being `r 1-confusionMatrix(predrf1,testing1.1$classe)$overall[1]`.
+Let's do a sanity check and compare this to our manual calculation. 
+
+
+```{r}
+#OUT OF SAMPLE ERROR
+OOSE.acc<-sum(predrf1==testing1.1$classe)/length(predrf1)
+
+OOSE<-1-OOSE.acc
+
+```
+We calculate the out of sample error to be `r OOSE`, which is consistent with the confusion matrix output.
+
+##CITED REFERENCES
+1. Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. (http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har)
+
+##CONCLUSION
+In this analysis, we used a substantially sized data set with no inclination of variable relationship with regards to the predictor. An effective number of relevant variables was determined utilizing machine learning. Random Forest model yielded 98.63% model accuracy when run against the testing data set.
+
+##PREDICTION AGAINST VALIDATION SET
+
+```{r echo=FALSE, results = 'hide'} 
+#Predicted Workout Types Against Validation data set
+predrf2<-predict(model1.2, newdata=validation)
+predrf2
+
+
+```
